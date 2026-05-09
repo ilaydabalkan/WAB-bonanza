@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Bonanza A36 - Weight & Balance Calculator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background:#f5f5f5;color:#333}
+input[type=number]{width:80px;padding:5px 8px;border:1px solid #ccc;border-radius:4px;font-size:14px;text-align:right}
+input[type=number]:focus{outline:2px solid #1565c0;border-color:#1565c0}
+input[type=text]{padding:5px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px}
+input[type=text]:focus{outline:2px solid #1565c0;border-color:#1565c0}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:right;padding:6px 8px;border-bottom:2px solid #ccc;background:#f0f0f0}
+th:first-child{text-align:left}
+td{padding:5px 8px;text-align:right}
+td:first-child{text-align:left}
+.mb{padding:4px 10px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:12px;margin:0 2px}
+.mb:hover{background:#e3f2fd;border-color:#1565c0}
+.mb.ac{background:#1565c0;color:#fff;border-color:#1565c0}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const{useState,useEffect,useRef,useCallback}=React;
+
+// AFM Data - Beechcraft Bonanza 36/A36, SN E-500 (E-1 thru E-631)
+// Source: POH/AFM P/N 36-590002-19C
+const AFM={
+  maxRampKg:1638.4,   // 3612 lbs
+  maxTOKg:1632.9,     // 3600 lbs
+  maxLdgKg:1632.9,    // 3600 lbs
+  maxBagKg:181.4,     // 400 lbs (AFM Section II - Weight Limits)
+  maxFuelL:280,       // 74 US gal optional system
+  fd:0.72,            // avgas 100LL density kg/L
+  taxiKg:5.4,         // 12 lbs start/taxi fuel
+  taxiArm:75,
+  fsArm:77,           // front seats arm (FS 75-79 midpoint)
+  rsArm:117,          // rear seats arm (FS 115-120 midpoint)
+  bagArm:150,         // baggage behind center seats
+  fArm:75,            // fuel leading edge tanks
+  fwd31:74.0,         // fwd CG limit at 3100 lbs
+  fwd36:81.0,         // fwd CG limit at 3600 lbs
+  aft:87.7,           // aft CG limit all weights
+  wBreak:1406.1,      // 3100 lbs breakpoint
+  macLE:66.7,
+  macLen:65.3,
+  bew:1012,           // default BEW (typical for E-500)
+  bewArm:77.2
+};
+
+// EASA standard masses for 1-5 pax seat aircraft (AMC1 CAT.POL.MAA.100)
+const EASA_CREW=85;    // flight crew member
+const EASA_MALE=104;   // male adult incl hand baggage
+const EASA_FEMALE=86;  // female adult incl hand baggage
+const EASA_CHILD=35;   // child 2-12 years
+
+function fwdLim(w){
+  if(w<=AFM.wBreak)return AFM.fwd31;
+  if(w>=AFM.maxTOKg)return AFM.fwd36;
+  return AFM.fwd31+((w-AFM.wBreak)/(AFM.maxTOKg-AFM.wBreak))*(AFM.fwd36-AFM.fwd31);
+}
+function toMAC(c){return((c-AFM.macLE)/AFM.macLen)*100}
+function inEnv(w,c){
+  if(w<100)return null;
+  return c>=fwdLim(w)&&c<=AFM.aft&&w<=AFM.maxTOKg;
+}
+
+// CG Envelope Chart
+function Chart({conds}){
+  const ref=useRef(null);
+  const draw=useCallback(()=>{
+    const cv=ref.current;if(!cv)return;
+    const ctx=cv.getContext("2d");
+    const W=cv.width=cv.offsetWidth*2,H=cv.height=cv.offsetHeight*2;
+    ctx.scale(2,2);const w=W/2,h=H/2;
+    ctx.clearRect(0,0,w,h);
+    const p={t:30,r:15,b:40,l:50},cw=w-p.l-p.r,ch=h-p.t-p.b;
+    const cMin=70,cMax=92,wMin=800,wMax=1700;
+    const tX=c=>p.l+((c-cMin)/(cMax-cMin))*cw;
+    const tY=wt=>p.t+ch-((wt-wMin)/(wMax-wMin))*ch;
+    ctx.fillStyle="#fff";ctx.fillRect(0,0,w,h);
+    ctx.strokeStyle="#e0e0e0";ctx.lineWidth=0.5;
+    for(let i=72;i<=90;i+=2){ctx.beginPath();ctx.moveTo(tX(i),p.t);ctx.lineTo(tX(i),p.t+ch);ctx.stroke()}
+    for(let i=900;i<=1700;i+=100){ctx.beginPath();ctx.moveTo(p.l,tY(i));ctx.lineTo(p.l+cw,tY(i));ctx.stroke()}
+    // envelope
+    const ev=[{c:74,w:800},{c:74,w:AFM.wBreak},{c:81,w:AFM.maxTOKg},{c:87.7,w:AFM.maxTOKg},{c:87.7,w:800}];
+    ctx.beginPath();ev.forEach((e,i)=>{i===0?ctx.moveTo(tX(e.c),tY(e.w)):ctx.lineTo(tX(e.c),tY(e.w))});ctx.closePath();
+    ctx.fillStyle="rgba(76,175,80,0.15)";ctx.fill();
+    ctx.strokeStyle="#4caf50";ctx.lineWidth=2;ctx.stroke();
+    // labels
+    ctx.fillStyle="#666";ctx.font="10px Arial";ctx.textAlign="center";
+    for(let i=72;i<=90;i+=2)ctx.fillText(i+"",tX(i),p.t+ch+14);
+    ctx.textAlign="right";
+    for(let i=900;i<=1700;i+=100)ctx.fillText(i+"",p.l-5,tY(i)+3);
+    ctx.fillStyle="#888";ctx.textAlign="center";
+    ctx.fillText("CG (inches aft datum)",p.l+cw/2,h-4);
+    ctx.save();ctx.translate(11,p.t+ch/2);ctx.rotate(-Math.PI/2);ctx.fillText("Weight (kg)",0,0);ctx.restore();
+    // points
+    const col={"Ramp":"#ff9800","Take-Off":"#2196f3","Landing":"#9c27b0","Zero Fuel":"#ff5722"};
+    conds.forEach(d=>{
+      if(!d.w||!d.c||d.w<100)return;
+      const x=tX(d.c),y=tY(d.w),cc=col[d.l]||"#333";
+      ctx.fillStyle=cc;ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle="#fff";ctx.lineWidth=1.5;ctx.stroke();
+      ctx.fillStyle=cc;ctx.font="bold 9px Arial";ctx.textAlign="left";
+      ctx.fillText(d.l,x+8,y+3);
+    });
+    // MTOW line
+    ctx.setLineDash([5,3]);ctx.strokeStyle="#f44336";ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(p.l,tY(AFM.maxTOKg));ctx.lineTo(p.l+cw,tY(AFM.maxTOKg));ctx.stroke();
+    ctx.fillStyle="#f44336";ctx.font="9px Arial";ctx.textAlign="right";
+    ctx.fillText("MTOW 1633 kg",p.l+cw,tY(AFM.maxTOKg)-4);
+    ctx.setLineDash([]);
+  },[conds]);
+  useEffect(()=>{draw()},[draw]);
+  return React.createElement("canvas",{ref,style:{width:"100%",height:280,display:"block",border:"1px solid #ddd",borderRadius:6,background:"#fff"}});
+}
+
+function App(){
+  const[bw,setBw]=useState(AFM.bew);
+  const[ba,setBa]=useState(AFM.bewArm);
+  // Pilots fixed at EASA crew 85 kg
+  const p1=EASA_CREW, p2=EASA_CREW;
+  // Passengers
+  const[x1,setX1]=useState(0);
+  const[x2,setX2]=useState(0);
+  const[bag,setBag]=useState(0);
+  const[fl,setFl]=useState(200);
+  const[tl,setTl]=useState(120);
+
+  const fk=fl*AFM.fd, tk=tl*AFM.fd, txk=AFM.taxiKg;
+  const fr=p1+p2, rr=x1+x2;
+  const bM=bw*ba, fM=fr*AFM.fsArm, rM=rr*AFM.rsArm;
+  const bgM=bag*AFM.bagArm, fuM=fk*AFM.fArm;
+  const txM=txk*AFM.taxiArm, trM=tk*AFM.fArm;
+
+  const zW=bw+fr+rr+bag, zMo=bM+fM+rM+bgM, zC=zW>0?zMo/zW:0;
+  const rW=zW+fk, rMo=zMo+fuM, rC=rW>0?rMo/rW:0;
+  const tW=rW-txk, tMo=rMo-txM, tC=tW>0?tMo/tW:0;
+  const lW=tW-tk, lMo=tMo-trM, lC=lW>0?lMo/lW:0;
+
+  const rOk=rW<=AFM.maxRampKg, tOk=tW<=AFM.maxTOKg, lOk=lW<=AFM.maxLdgKg;
+  const bOk=bag<=AFM.maxBagKg;
+  const tcOk=inEnv(tW,tC), lcOk=inEnv(lW,lC), zcOk=inEnv(zW,zC);
+  const allOk=rOk&&tOk&&lOk&&bOk&&tcOk&&lcOk&&(zcOk!==false);
+
+  const cn=[{l:"Zero Fuel",w:zW,c:zC},{l:"Ramp",w:rW,c:rC},{l:"Take-Off",w:tW,c:tC},{l:"Landing",w:lW,c:lC}];
+
+  const sc={background:"#fff",border:"1px solid #e0e0e0",borderRadius:8,padding:16,marginBottom:12,boxShadow:"0 1px 3px rgba(0,0,0,0.06)"};
+  const st={fontSize:14,fontWeight:600,color:"#333",marginBottom:10,paddingBottom:6,borderBottom:"2px solid #e0e0e0"};
+
+  const Tag=({ok,text})=>React.createElement("span",{
+    style:{display:"inline-block",padding:"3px 10px",borderRadius:4,fontSize:12,
+    fontWeight:600,marginRight:6,marginBottom:4,
+    background:ok?"#e8f5e9":"#ffebee",color:ok?"#2e7d32":"#c62828",
+    border:"1px solid "+(ok?"#a5d6a7":"#ef9a9a")}
+  },ok?"✓ ":"✗ ",text);
+
+  const NumRow=({label,value,onChange,unit,arm,disabled,max,step})=>
+    React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:5}},
+      React.createElement("span",{style:{display:"inline-block",width:175,fontSize:13,color:disabled?"#999":"#444"}},
+        label,arm!=null&&React.createElement("span",{style:{color:"#999",fontSize:11}}," (arm "+arm+'")')),
+      React.createElement("input",{type:"number",value:value,
+        onChange:onChange?e=>onChange(parseFloat(e.target.value)||0):undefined,
+        min:0,max:max||9999,step:step||0.1,disabled:!!disabled,
+        style:disabled?{width:80,padding:"5px 8px",border:"1px solid #e0e0e0",borderRadius:4,fontSize:14,textAlign:"right",background:"#f5f5f5",color:"#999"}:undefined}),
+      React.createElement("span",{style:{fontSize:12,color:"#888"}},unit));
+
+  const PaxRow=({label,value,onChange,arm})=>
+    React.createElement("div",{style:{marginBottom:10}},
+      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:4}},
+        React.createElement("span",{style:{display:"inline-block",width:175,fontSize:13,color:"#444"}},
+          label,React.createElement("span",{style:{color:"#999",fontSize:11}}," (arm "+arm+'")')),
+        React.createElement("input",{type:"number",value:value,onChange:e=>onChange(parseFloat(e.target.value)||0),min:0,max:200,step:0.1}),
+        React.createElement("span",{style:{fontSize:12,color:"#888"}},"kg")),
+      React.createElement("div",{style:{marginLeft:0,display:"flex",alignItems:"center",gap:4,flexWrap:"wrap"}},
+        React.createElement("span",{style:{fontSize:11,color:"#999",width:175,display:"inline-block"}},"Quick fill →"),
+        React.createElement("button",{className:"mb"+(value===EASA_MALE?" ac":""),onClick:()=>onChange(EASA_MALE)},"Adult M "+EASA_MALE+" kg"),
+        React.createElement("button",{className:"mb"+(value===EASA_FEMALE?" ac":""),onClick:()=>onChange(EASA_FEMALE)},"Adult F "+EASA_FEMALE+" kg"),
+        React.createElement("button",{className:"mb"+(value===EASA_CHILD?" ac":""),onClick:()=>onChange(EASA_CHILD)},"Child "+EASA_CHILD+" kg"),
+        React.createElement("button",{className:"mb"+(value===0?" ac":""),onClick:()=>onChange(0)},"Empty")));
+
+  return React.createElement("div",{style:{minHeight:"100vh",background:"#f5f5f5",padding:12,maxWidth:700,margin:"0 auto"}},
+
+    // Header
+    React.createElement("div",{style:{background:"#1565c0",color:"#fff",padding:"14px 16px",borderRadius:8,marginBottom:12,textAlign:"center"}},
+      React.createElement("h1",{style:{margin:0,fontSize:18,fontWeight:700}},"Beechcraft Bonanza A36 — Weight & Balance Calculator"),
+      React.createElement("p",{style:{margin:"4px 0 0",fontSize:12,opacity:0.85}},"S/N E-500 · Electronic Load Sheet · European CAT Operations (kg)"),
+      React.createElement("p",{style:{margin:"4px 0 0",fontSize:11,opacity:0.65}},"Prepared by Ecrin İlayda Balkan")),
+
+    // Status
+    React.createElement("div",{style:{padding:"10px 16px",borderRadius:8,marginBottom:12,textAlign:"center",
+      background:allOk?"#e8f5e9":"#ffebee",border:"2px solid "+(allOk?"#66bb6a":"#ef5350")}},
+      React.createElement("span",{style:{fontSize:18,fontWeight:700,color:allOk?"#2e7d32":"#c62828"}},
+        allOk?"✓ WITHIN LIMITS":"✗ EXCEEDS LIMITS — CHECK VALUES")),
+
+    // BEW
+    React.createElement("div",{style:sc},
+      React.createElement("div",{style:st},"Aircraft Empty Weight"),
+      React.createElement(NumRow,{label:"Basic Empty Weight",value:bw,onChange:setBw,unit:"kg",arm:ba.toFixed(1)}),
+      React.createElement(NumRow,{label:"BEW Arm (from records)",value:ba,onChange:setBa,unit:"in"}),
+      React.createElement("p",{style:{fontSize:11,color:"#999",margin:"6px 0 0",fontStyle:"italic"}},
+        "Enter from the aircraft W&B record. Includes full oil for E-364 and later serials.")),
+
+    // Pilots (fixed)
+    React.createElement("div",{style:sc},
+      React.createElement("div",{style:st},"Flight Crew (EASA Standard Mass: 85 kg)"),
+      React.createElement(NumRow,{label:"Pilot (front left)",value:p1,unit:"kg",arm:AFM.fsArm,disabled:true}),
+      React.createElement(NumRow,{label:"Co-pilot (front right)",value:p2,unit:"kg",arm:AFM.fsArm,disabled:true}),
+      React.createElement("p",{style:{fontSize:11,color:"#999",margin:"4px 0 0",fontStyle:"italic"}},
+        "Fixed at 85 kg per EASA AMC1 CAT.POL.MAA.100 standard crew mass.")),
+
+    // Passengers
+    React.createElement("div",{style:sc},
+      React.createElement("div",{style:st},"Passengers"),
+      React.createElement("div",{style:{background:"#e3f2fd",border:"1px solid #90caf9",borderRadius:6,padding:10,marginBottom:12,fontSize:11,color:"#1565c0",lineHeight:1.6}},
+        React.createElement("strong",null,"EASA Standard Masses (1–5 pax seats, incl. hand baggage):"),React.createElement("br",null),
+        "Adult Male: 104 kg · Adult Female: 86 kg · Child (2–12 yrs): 35 kg"),
+      React.createElement(PaxRow,{label:"Passenger 1 (rear left)",value:x1,onChange:setX1,arm:AFM.rsArm}),
+      React.createElement(PaxRow,{label:"Passenger 2 (rear right)",value:x2,onChange:setX2,arm:AFM.rsArm})),
+
+    // Baggage
+    React.createElement("div",{style:sc},
+      React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center",...st}},
+        React.createElement("span",null,"Baggage"),
+        React.createElement(Tag,{ok:bOk,text:bag.toFixed(0)+" / "+AFM.maxBagKg.toFixed(0)+" kg max"})),
+      React.createElement(NumRow,{label:"Baggage compartment",value:bag,onChange:setBag,unit:"kg",arm:AFM.bagArm,max:400}),
+      React.createElement("p",{style:{fontSize:11,color:"#999",margin:"4px 0 0",fontStyle:"italic"}},
+        "Max baggage compartment load: 181 kg (400 lbs) per AFM Section II.")),
+
+    // Fuel
+    React.createElement("div",{style:sc},
+      React.createElement("div",{style:st},"Fuel (Avgas 100LL — 0.72 kg/L)"),
+      React.createElement(NumRow,{label:"Ramp Fuel",value:fl,onChange:setFl,unit:"L",arm:AFM.fArm,max:280,step:1}),
+      React.createElement("p",{style:{fontSize:12,color:"#666",margin:"2px 0 8px 183px"}},
+        "= "+fk.toFixed(1)+" kg ("+(fl*0.264172).toFixed(1)+" US gal)"),
+      React.createElement(NumRow,{label:"Trip Fuel (burned)",value:tl,onChange:setTl,unit:"L",arm:AFM.fArm,max:fl,step:1}),
+      React.createElement("p",{style:{fontSize:12,color:"#666",margin:"2px 0 0 183px"}},
+        "= "+tk.toFixed(1)+" kg · Start/taxi allowance: "+txk.toFixed(1)+" kg")),
+
+    // Loading Summary Table
+    React.createElement("div",{style:sc},
+      React.createElement("div",{style:st},"Loading Summary"),
+      React.createElement("div",{style:{overflowX:"auto"}},
+        React.createElement("table",null,
+          React.createElement("thead",null,
+            React.createElement("tr",{style:{background:"#f0f0f0"}},
+              React.createElement("th",{style:{textAlign:"left"}},"Item"),
+              React.createElement("th",null,"Mass (kg)"),
+              React.createElement("th",null,"Arm (in)"),
+              React.createElement("th",null,"Moment"))),
+          React.createElement("tbody",null,
+            [{n:"Basic Empty Weight",w:bw,a:ba,m:bM},
+             {n:"Front Seat (Crew)",w:fr,a:AFM.fsArm,m:fM},
+             {n:"Rear Seat (Passengers)",w:rr,a:AFM.rsArm,m:rM},
+             {n:"Baggage",w:bag,a:AFM.bagArm,m:bgM}
+            ].map((r,i)=>React.createElement("tr",{key:i,style:{borderBottom:"1px solid #eee"}},
+              React.createElement("td",null,r.n),React.createElement("td",null,r.w.toFixed(1)),
+              React.createElement("td",null,r.a.toFixed(1)),React.createElement("td",null,r.m.toFixed(0)))),
+            React.createElement("tr",{style:{background:"#fff3e0",fontWeight:700}},
+              React.createElement("td",null,"Zero Fuel Condition"),React.createElement("td",null,zW.toFixed(1)),
+              React.createElement("td",null,zC.toFixed(2)),React.createElement("td",null,zMo.toFixed(0))),
+            React.createElement("tr",{style:{borderBottom:"1px solid #eee"}},
+              React.createElement("td",null,"+ Fuel Loading"),React.createElement("td",null,fk.toFixed(1)),
+              React.createElement("td",null,AFM.fArm.toFixed(1)),React.createElement("td",null,fuM.toFixed(0))),
+            React.createElement("tr",{style:{background:"#fff8e1",fontWeight:700}},
+              React.createElement("td",null,"Ramp Condition"),React.createElement("td",null,rW.toFixed(1)),
+              React.createElement("td",null,rC.toFixed(2)),React.createElement("td",null,rMo.toFixed(0))),
+            React.createElement("tr",{style:{borderBottom:"1px solid #eee",color:"#c62828"}},
+              React.createElement("td",null,"− Start/Taxi Fuel"),React.createElement("td",null,"−"+txk.toFixed(1)),
+              React.createElement("td",null,AFM.taxiArm.toFixed(1)),React.createElement("td",null,"−"+txM.toFixed(0))),
+            React.createElement("tr",{style:{background:"#e3f2fd",fontWeight:700}},
+              React.createElement("td",null,"Take-Off Condition"),React.createElement("td",null,tW.toFixed(1)),
+              React.createElement("td",null,tC.toFixed(2)),React.createElement("td",null,tMo.toFixed(0))),
+            React.createElement("tr",{style:{borderBottom:"1px solid #eee",color:"#c62828"}},
+              React.createElement("td",null,"− Trip Fuel"),React.createElement("td",null,"−"+tk.toFixed(1)),
+              React.createElement("td",null,AFM.fArm.toFixed(1)),React.createElement("td",null,"−"+trM.toFixed(0))),
+            React.createElement("tr",{style:{background:"#f3e5f5",fontWeight:700}},
+              React.createElement("td",null,"Landing Condition"),React.createElement("td",null,lW.toFixed(1)),
+              React.createElement("td",null,lC.toFixed(2)),React.createElement("td",null,lMo.toFixed(0))))))),
+
+    // Limit Checks
+    React.createElement("div",{style:sc},
+      React.createElement("div",{style:st},"Limit Checks"),
+      React.createElement("div",{style:{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}},
+        React.createElement(Tag,{ok:rOk,text:"Ramp "+rW.toFixed(0)+"/"+AFM.maxRampKg.toFixed(0)+" kg"}),
+        React.createElement(Tag,{ok:tOk,text:"T/O "+tW.toFixed(0)+"/"+AFM.maxTOKg.toFixed(0)+" kg"}),
+        React.createElement(Tag,{ok:lOk,text:"Ldg "+lW.toFixed(0)+"/"+AFM.maxLdgKg.toFixed(0)+" kg"}),
+        React.createElement(Tag,{ok:bOk,text:"Bag "+bag.toFixed(0)+"/"+AFM.maxBagKg.toFixed(0)+" kg"}),
+        React.createElement(Tag,{ok:tcOk,text:"T/O CG "+tC.toFixed(2)+'"'}),
+        React.createElement(Tag,{ok:lcOk,text:"Ldg CG "+lC.toFixed(2)+'"'})),
+      React.createElement("div",{style:{fontSize:12,color:"#777",lineHeight:1.7}},
+        React.createElement("div",null,"Take-Off CG: Fwd "+fwdLim(tW).toFixed(1)+'" — Aft '+AFM.aft+'" | Actual: '+tC.toFixed(2)+'" ('+toMAC(tC).toFixed(1)+'% MAC)'),
+        React.createElement("div",null,"Landing CG: Fwd "+fwdLim(lW).toFixed(1)+'" — Aft '+AFM.aft+'" | Actual: '+lC.toFixed(2)+'" ('+toMAC(lC).toFixed(1)+'% MAC)'))),
+
+    // CG Envelope
+    React.createElement("div",{style:sc},
+      React.createElement("div",{style:st},"CG Envelope Graph"),
+      React.createElement(Chart,{conds:cn}),
+      React.createElement("div",{style:{display:"flex",gap:14,justifyContent:"center",marginTop:8}},
+        [{c:"#ff5722",l:"Zero Fuel"},{c:"#ff9800",l:"Ramp"},{c:"#2196f3",l:"Take-Off"},{c:"#9c27b0",l:"Landing"}].map((x,i)=>
+          React.createElement("span",{key:i,style:{fontSize:11,color:x.c,fontWeight:600}},"● "+x.l)))),
+
+    // Reference
+    React.createElement("div",{style:{...sc,background:"#fafafa",fontSize:11,color:"#999",lineHeight:1.7}},
+      React.createElement("div",{style:{fontWeight:600,color:"#888",marginBottom:4}},"Reference (from AFM)"),
+      React.createElement("div",null,"Datum: 83.1\" forward of fwd jack points · MAC LE: 66.7\" · MAC: 65.3\""),
+      React.createElement("div",null,"Max Ramp: 1638 kg (3612 lbs) · Max T/O & Landing: 1633 kg (3600 lbs)"),
+      React.createElement("div",null,"Max Baggage: 181 kg (400 lbs) · Fuel Capacity: 280 L / 74 US gal (optional)"),
+      React.createElement("div",null,"CG Fwd: 74.0\" (≤1406 kg) → 81.0\" (1633 kg) · CG Aft: 87.7\" all weights"),
+      React.createElement("div",null,"Front seats: ARM 75–79\" · Rear seats: ARM 115–120\" · Baggage: ARM 150\" · Fuel: ARM 75\""))
+  );
+}
+
+ReactDOM.render(React.createElement(App),document.getElementById("root"));
+</script>
+</body>
+</html>
