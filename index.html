@@ -34,7 +34,6 @@ function fwdLim(w){if(w<=AFM.wBreak)return AFM.fwd31;if(w>=AFM.maxTOKg)return AF
 function toMAC(c){return((c-AFM.macLE)/AFM.macLen)*100}
 function inEnv(w,c){if(w<100)return null;return c>=fwdLim(w)&&c<=AFM.aft&&w<=AFM.maxTOKg}
 
-// Input that only updates parent on blur - no fighting with typing
 function SmartNum({value,onChange,disabled}){
   const[txt,setTxt]=useState(String(value));
   const foc=useRef(false);
